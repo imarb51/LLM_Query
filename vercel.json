@@ -2,14 +2,14 @@
     "version": 2,
     "builds": [
       {
-        "src": "DEEPEDGEAI/flask_app/app.py",
+        "src": "flask_app/app.py",
         "use": "@vercel/python"
       }
     ],
     "routes": [
       {
         "src": "/(.*)",
-        "dest": "DEEPEDGEAI/flask_app/app.py"
+        "dest": "flask_app/app.py"
       }
     ]
   }
