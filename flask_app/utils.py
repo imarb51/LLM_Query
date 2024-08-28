@@ -1,13 +1,11 @@
 import os
-import openai
 import requests
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
-# Load environment variables from .env file
-from dotenv import load_dotenv
+import json
 import anthropic
-import os
 
+# Load environment variables from .env file
 load_dotenv()
 
 SERP_API_KEY = os.getenv('SERP_API_KEY')
@@ -15,83 +13,61 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 def search_articles(query):
     """
-    Searches for articles related to the query using SerpAPI.
+    Searches for articles related to the query using the serper.dev API.
     Returns a list of dictionaries containing article URLs, titles, and snippets.
     """
-    url = "https://serpapi.com/search.json"  # Correct base URL for SerpAPI
-
-    # Query parameters for the search
-    params = {
-        "engine": "google",  # Use Google engine
-        "q": query,  # The search query
-        "api_key": SERP_API_KEY  # API key from .env
-    }
-
-    # Debugging
-    # print(f"Using SERP_API_KEY: {SERP_API_KEY}")
-    # print(f"Query: {query}")
+    url = "https://google.serper.dev/search"
     
-    try:
-        # Make the GET request
-        response = requests.get(url, params=params)
-        
-        
-        # Check for HTTP errors
-        response.raise_for_status()
+    headers = {
+        'X-API-KEY': SERP_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    payload = json.dumps({"q": query})
 
-        # Parse the response JSON
+    print(f"Using API Key: {SERP_API_KEY[:5]}...{SERP_API_KEY[-5:]}")
+    print(f"Query: {query}")
+    print(f"Request URL: {url}")
+
+    try:
+        response = requests.post(url, headers=headers, data=payload)
+        response.raise_for_status()
         data = response.json()
-        
 
         articles = []
-
-        # Extract relevant article information
-        for result in data.get('organic_results', []):
-            article = {
-                'url': result.get('link'),
-                'title': result.get('title'),
-                'snippet': result.get('snippet')
-            }
-            articles.append(article)
-
-        # Return the list of articles
+        if 'organic' in data and isinstance(data['organic'], list):
+            for result in data['organic']:
+                article = {
+                    'url': result.get('link'),
+                    'title': result.get('title'),
+                    'snippet': result.get('snippet', 'No snippet available')
+                }
+                articles.append(article)
+        
+        print(f"Retrieved articles: {articles}")
         return articles
 
     except requests.exceptions.HTTPError as http_err:
         print(f"HTTP error occurred: {http_err}")
-        return None
+        print(f"Response content: {response.content}")
+        return []
     except Exception as err:
         print(f"Other error occurred: {err}")
-        return None
-
-
-# Now we have got the content
+        return []
 
 def fetch_article_content(url):
     """
     Fetches the article content, extracting headings and text.
     """
     try:
-        # Make the GET request to fetch the article HTML
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an error for HTTP issues
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
 
-        # Parse the HTML content
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Extract headings (h1, h2, h3) and paragraphs
-        headings = []
-        paragraphs = []
-        
-        for heading in soup.find_all(['h1', 'h2', 'h3']):
-            headings.append(heading.get_text(strip=True))
-        
-        for paragraph in soup.find_all('p'):
-            paragraphs.append(paragraph.get_text(strip=True))
-        
-        # Combine headings and paragraphs into a single string
+
+        headings = [heading.get_text(strip=True) for heading in soup.find_all(['h1', 'h2', 'h3'])]
+        paragraphs = [paragraph.get_text(strip=True) for paragraph in soup.find_all('p')]
+
         content = "\n".join(headings) + "\n\n" + "\n".join(paragraphs)
-        
         return content.strip()
 
     except requests.exceptions.RequestException as e:
@@ -101,41 +77,38 @@ def fetch_article_content(url):
 def fetch_top_webpage_content(query):
     """
     Fetches the content of the top webpage for the given query and extracts text.
-    Limits the content to no more than three paragraphs.
+    If web scraping fails, uses the search result snippets.
     """
-    # Step 1: Use SerpAPI to get the top search result URL
-    serp_api_key = os.getenv('SERP_API_KEY')
-    serp_url = "https://serpapi.com/search.json"
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": serp_api_key
-    }
-    
-    response = requests.get(serp_url, params=params)
-    response.raise_for_status()
-    data = response.json()
-    
-    # Get the URL of the top search result
-    top_url = data.get('organic_results', [])[0].get('link')
-    
-    if not top_url:
-        raise ValueError("No URL found in search results")
-    
-    # Step 2: Fetch the content of the top webpage
-    webpage_response = requests.get(top_url)
-    webpage_response.raise_for_status()
-    soup = BeautifulSoup(webpage_response.content, 'html.parser')
-    
-    # Extract text from paragraphs
-    paragraphs = soup.find_all('p')
-    content = ""
-    for p in paragraphs[:3]:  # Limit to the first three paragraphs
-        content += p.get_text() + "\n\n"
-    
-    return content.strip()
+    try:
+        # Step 1: Use Serper.dev API to get the top search results
+        articles = search_articles(query)
+        
+        if not articles:
+            print("No articles found for the given query")
+            return ""
+        
+        # Get the URL of the top search result
+        top_url = articles[0].get('url')
+        
+        if not top_url:
+            print("No URL found in search results")
+            return ""
 
+        # Step 2: Attempt to fetch the content of the top webpage
+        content = fetch_article_content(top_url)
+        
+        # If web scraping fails, use the snippets from search results
+        if not content:
+            print("Web scraping failed. Using search result snippets.")
+            content = "\n\n".join([article['snippet'] for article in articles[:3]])
+        
+        # Limit to three paragraphs
+        paragraphs = content.split('\n\n')[:3]
+        return '\n\n'.join(paragraphs)
 
+    except Exception as e:
+        print(f"Error in fetch_top_webpage_content: {e}")
+        return ""
 
 
 def generate_answer(content, query, conversation_history):
